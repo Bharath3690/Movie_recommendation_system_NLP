@@ -1,0 +1,105 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import requests
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# === CONFIGURATION ===
+OMDB_API_KEY = "YOUR_OMDB_API_KEY"  # Replace with your OMDb key
+
+# === DATA LOADING ===
+@st.cache_data
+def load_data():
+    credits = pd.read_csv("credits.csv")
+    movies = pd.read_csv("movies.csv")
+    ratings = pd.read_csv("ratings.csv")
+    return credits, movies, ratings
+
+credits, movies, ratings = load_data()
+
+# === DATA MERGING & CLEANING ===
+movies = movies.merge(credits, on="title")
+movies['overview'] = movies['overview'].fillna('')
+movies['genres'] = movies['genres'].fillna('')
+movies['combined'] = movies['overview'] + " " + movies['genres']
+
+# === NLP + TF-IDF ===
+tfidf = TfidfVectorizer(stop_words="english")
+tfidf_matrix = tfidf.fit_transform(movies['combined'])
+cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+
+# === MAPPINGS ===
+indices = pd.Series(movies.index, index=movies['title']).drop_duplicates()
+movie_id_map = pd.Series(movies['id'].values, index=movies['title'])
+
+# === OMDb POSTER FETCH ===
+def fetch_movie_details(title):
+    try:
+        url = f"http://www.omdbapi.com/?t={title}&apikey={OMDB_API_KEY}"
+        response = requests.get(url).json()
+        return {
+            "poster": response.get("Poster"),
+            "plot": response.get("Plot"),
+            "year": response.get("Year"),
+            "runtime": response.get("Runtime"),
+            "genre": response.get("Genre")
+        }
+    except:
+        return {"poster": None, "plot": "", "year": "", "runtime": "", "genre": ""}
+
+# === RECOMMENDER FUNCTION ===
+def hybrid_recommend(title, user_id=None, top_n=10):
+    if title not in indices:
+        return pd.DataFrame()
+
+    idx = indices[title]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)[1:top_n*3]
+    movie_indices = [i[0] for i in sim_scores]
+
+    rec_movies = movies.iloc[movie_indices].copy()
+    rec_movies['movieId'] = rec_movies['id']
+    movie_mean_ratings = ratings.groupby('movieId')['rating'].mean().reset_index()
+    rec_movies = rec_movies.merge(movie_mean_ratings, on='movieId', how='left')
+    rec_movies['rating'] = rec_movies['rating'].fillna(0)
+
+    if user_id:
+        seen = ratings[ratings['userId'] == int(user_id)]['movieId'].tolist()
+        rec_movies = rec_movies[~rec_movies['movieId'].isin(seen)]
+
+    rec_movies = rec_movies.sort_values(by="rating", ascending=False).head(top_n)
+    rec_movies['details'] = rec_movies['title'].apply(fetch_movie_details)
+    return rec_movies
+
+# === STREAMLIT UI ===
+st.title("🎥 Movie Recommendation System")
+
+user_id = st.number_input("Enter your User ID", min_value=1, value=1, step=1)
+
+# Removed search bar
+selected_movie = st.selectbox("Choose a movie you like", movies['title'].dropna().unique())
+
+if st.button("Recommend Movies"):
+    st.subheader("🎯 Top Recommendations Just for You")
+    recs = hybrid_recommend(selected_movie, user_id)
+
+    if recs.empty:
+        st.warning("No recommendations found.")
+    else:
+        for i, row in recs.iterrows():
+            details = row['details']
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                if details["poster"]:
+                    st.image(details["poster"], width=140)
+            with col2:
+                st.markdown(f"**{row['title']} ({details['year']})**")
+                st.write(f"🧠 Genre: {details['genre']}")
+                st.write(f"⏱ Runtime: {details['runtime']}")
+                st.write(f"⭐ Avg Rating: {row['rating']:.2f}")
+                st.write(f"📝 Plot: {details['plot']}")
+                feedback = st.radio(f"Did you like '{row['title']}'?", ('👍 Like', '👎 Dislike'), key=f"feedback_{i}")
+
+                if st.button("Save Feedback", key=f"save_{i}"):
+                    st.success(f"Feedback for '{row['title']}' recorded!")
