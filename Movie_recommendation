@@ -5,15 +5,13 @@ import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# === CONFIGURATION ===
-OMDB_API_KEY = "YOUR_OMDB_API_KEY"  # Replace with your OMDb key
 
-# === DATA LOADING ===
-@st.cache_data
+OMDB_API_KEY = "omdb_api"  # Replace with your OMDb key
+
 def load_data():
-    credits = pd.read_csv("credits.csv")
-    movies = pd.read_csv("movies.csv")
-    ratings = pd.read_csv("ratings.csv")
+    credits = pd.read_csv("moviedatasets/credits.csv")
+    movies = pd.read_csv("moviedatasets/movies.csv")
+    ratings = pd.read_csv("moviedatasets/ratings.csv")
     return credits, movies, ratings
 
 credits, movies, ratings = load_data()
